@@ -1,0 +1,62 @@
+<policies>
+    <inbound>
+        <base />
+        <set-variable name="deployment-region" value="{{current-region}}" />
+        <choose>
+            <when condition="@("East US".Equals((string)context.Variables["deployment-region"]))">
+                <set-variable name="appinsights-key" value="{{eastus-appinsights-key}}" />
+                <set-variable name="appinsights-endpoint" value="{{eastus-appinsights-endpoint}}" />
+                <set-variable name="region-name" value="East US" />
+            </when>
+            <when condition="@("West US".Equals((string)context.Variables["deployment-region"]))">
+                <set-variable name="appinsights-key" value="{{westus-appinsights-key}}" />
+                <set-variable name="appinsights-endpoint" value="{{westus-appinsights-endpoint}}" />
+                <set-variable name="region-name" value="West US" />
+            </when>
+            <otherwise>
+                <set-variable name="appinsights-key" value="{{eastus-appinsights-key}}" />
+                <set-variable name="appinsights-endpoint" value="{{eastus-appinsights-endpoint}}" />
+                <set-variable name="region-name" value="East US" />
+            </otherwise>
+        </choose>
+        <set-variable name="request-start-time" value="@(DateTime.UtcNow)" />
+    </inbound>
+    <backend>
+        <base />
+    </backend>
+    <outbound>
+        <base />
+        <set-variable name="request-duration" value="@{
+            var startTime = (DateTime)context.Variables["request-start-time"];
+            return DateTime.UtcNow.Subtract(startTime).TotalMilliseconds;
+        }" />
+        <!-- Simple telemetry to regional App Insights -->
+        <send-request mode="new" response-variable-name="telemetry-response" timeout="10" ignore-error="true">
+            <set-url>@((string)context.Variables["appinsights-endpoint"])</set-url>
+            <set-method>POST</set-method>
+            <set-header name="Content-Type" exists-action="override">
+                <value>application/json</value>
+            </set-header>
+            <set-body>@{
+                return "{\"name\":\"Microsoft.ApplicationInsights.Event\",\"time\":\"" + 
+                       DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffK") + 
+                       "\",\"iKey\":\"" + (string)context.Variables["appinsights-key"] + 
+                       "\",\"data\":{\"baseType\":\"EventData\",\"baseData\":{\"name\":\"APIM-Regional-Test\",\"properties\":{\"region\":\"" + 
+                       (string)context.Variables["region-name"] + "\",\"api\":\"" + context.Api.Name + 
+                       "\",\"duration\":\"" + ((double)context.Variables["request-duration"]).ToString("F2") + "\"}}}}";
+            }</set-body>
+        </send-request>
+        <set-header name="X-APIM-Target-Region" exists-action="override">
+            <value>@((string)context.Variables["region-name"])</value>
+        </set-header>
+        <set-header name="X-APIM-Telemetry-Status" exists-action="override">
+            <value>@(((IResponse)context.Variables["telemetry-response"]).StatusCode.ToString())</value>
+        </set-header>
+        <trace source="RegionalTelemetry" severity="information">
+            <message>@("Sent telemetry to " + (string)context.Variables["region-name"] + " App Insights. Status: " + ((IResponse)context.Variables["telemetry-response"]).StatusCode)</message>
+        </trace>
+    </outbound>
+    <on-error>
+        <base />
+    </on-error>
+</policies>
